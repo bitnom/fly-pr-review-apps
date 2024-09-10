@@ -26,6 +26,15 @@ postgres_app="${INPUT_POSTGRES:-$REPO_NAME-pr-$PR_NUMBER-postgres}"
 region="${INPUT_REGION:-${FLY_REGION:-ord}}"
 org="${INPUT_ORG:-${FLY_ORG:-personal}}"
 dockerfile="$INPUT_DOCKERFILE"
+build_args="$INPUT_BUILD_ARGS"
+
+# Process build arguments
+build_args=""
+if [ -n "$INPUT_BUILD_ARGS" ]; then
+    while IFS= read -r line; do
+        build_args="$build_args --build-arg $line"
+    done <<< "$INPUT_BUILD_ARGS"
+fi
 
 # only wait for the deploy to complete if the user has requested the wait option
 # otherwise detach so the GitHub action doesn't run as long
@@ -51,15 +60,15 @@ fi
 
 # Deploy the Fly app, creating it first if needed.
 if ! flyctl status --app "$app"; then
-  flyctl launch --no-deploy --copy-config --name "$app" --dockerfile "$dockerfile" --regions "$region" --org "$org"
+  flyctl launch --no-deploy --copy-config --name "$app" --dockerfile "$dockerfile" --regions "$region" --org "$org" "$build_args"
 
   # Attach postgres cluster and set the DATABASE_URL
   flyctl postgres attach "$postgres_app" --app "$app"
-  flyctl deploy $detach --app "$app" --regions "$region" --strategy immediate --remote-only
+  flyctl deploy $detach --app "$app" --regions "$region" --strategy immediate --remote-only "$build_args"
 
   statusmessage="Review app created. It may take a few minutes for the app to deploy."
 elif [ "$EVENT_TYPE" = "synchronize" ]; then
-  flyctl deploy $detach --app "$app" --regions "$region" --strategy immediate --remote-only
+  flyctl deploy $detach --app "$app" --regions "$region" --strategy immediate --remote-only "$build_args"
   statusmessage="Review app updated. It may take a few minutes for your changes to be deployed."
 fi
 

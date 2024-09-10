@@ -21,3 +21,6 @@ inputs:
   dockerfile:
     description: Path to a Dockerfile, will be used for building the image
     required: true
+  build-args:
+    description: 'Build arguments for Docker build'
+    required: false
