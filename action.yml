@@ -24,3 +24,6 @@ inputs:
   build-args:
     description: 'Build arguments for Docker build'
     required: false
+  wait:
+    description: 'Wait for flyio deployment to finish instead of detach'
+    required: false
