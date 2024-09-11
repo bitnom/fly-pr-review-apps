@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 
+# Exit immediately if a command exits with a non-zero status.
+# Print commands and their arguments as they are executed.
 set -ex
 
+# Change to the specified directory if INPUT_PATH is provided
 if [ -n "$INPUT_PATH" ]; then
-  # Allow user to change directories in which to run Fly commands.
   cd "$INPUT_PATH" || exit
 fi
 
+# Extract the PR number from the GitHub event JSON
 PR_NUMBER=$(jq -r .number /github/workflow/event.json)
 if [ -z "$PR_NUMBER" ]; then
   echo "This action only supports pull_request actions."
@@ -16,67 +19,94 @@ fi
 # Check the flyctl version
 flyctl version
 
+# Extract repository name and event type from the GitHub event JSON
 REPO_NAME=$(jq -r .repository.name /github/workflow/event.json)
 EVENT_TYPE=$(jq -r .action /github/workflow/event.json)
 
-# Default the Fly app name to {repo_name}-pr-{pr_number}
+# Set up variables with default values
 app="${INPUT_NAME:-$REPO_NAME-pr-$PR_NUMBER}"
-# # Default the Fly app name to {repo_name}-pr-{pr_number}-postgres
 postgres_app="${INPUT_POSTGRES:-$REPO_NAME-pr-$PR_NUMBER-postgres}"
 region="${INPUT_REGION:-${FLY_REGION:-ord}}"
 org="${INPUT_ORG:-${FLY_ORG:-personal}}"
 dockerfile="$INPUT_DOCKERFILE"
-build_args="$INPUT_BUILD_ARGS"
 
-# Process build arguments
-build_args=""
-if [ -n "$INPUT_BUILD_ARGS" ]; then
-    while IFS= read -r line; do
-        build_args="$build_args --build-arg $line"
-    done <<< "$INPUT_BUILD_ARGS"
-fi
+# Set detach flag based on INPUT_WAIT
+detach=""
+[ "$INPUT_WAIT" != "true" ] && detach="--detach"
 
-# only wait for the deploy to complete if the user has requested the wait option
-# otherwise detach so the GitHub action doesn't run as long
-if [ "$INPUT_WAIT" = "true" ]; then
-  detach=""
-else
-  detach="--detach"
-fi
-
+# Safety check: ensure app name contains PR number
 if ! echo "$app" | grep "$PR_NUMBER"; then
   echo "For safety, this action requires the app's name to contain the PR number."
   exit 1
 fi
 
-# If PR is closed or merged, the app will be deleted
+# If PR is closed, destroy the app and exit
 if [ "$EVENT_TYPE" = "closed" ]; then
   flyctl apps destroy "$app" -y || true
-
-  message="Review app deleted."
-  echo "message=$message" >> $GITHUB_OUTPUT
+  echo "message=Review app deleted." >> $GITHUB_OUTPUT
   exit 0
 fi
 
-# Deploy the Fly app, creating it first if needed.
-if ! flyctl status --app "$app"; then
-  flyctl "launch --no-deploy --copy-config --name $app --dockerfile $dockerfile --regions $region --org $org --ha false $build_args"
+# Initialize the command array
+build_cmd=(flyctl)
 
-  # Attach postgres cluster and set the DATABASE_URL
-  flyctl "postgres attach $postgres_app --app $app"
-  flyctl "deploy $detach --app $app --regions $region --strategy immediate --remote-only --ha false $build_args"
+# Check if the app already exists
+if ! flyctl status --app "$app"; then
+  # App doesn't exist, so we need to create it
+  build_cmd+=(launch --no-deploy --copy-config --name "$app" --dockerfile "$dockerfile" --regions "$region" --org "$org" --ha false)
+
+  # Add build arguments if provided
+  if [ -n "$INPUT_BUILD_ARGS" ]; then
+    while IFS= read -r arg; do
+      build_cmd+=(--build-arg "$arg")
+    done <<< "$INPUT_BUILD_ARGS"
+  fi
+
+  # Execute the build command
+  "${build_cmd[@]}"
+
+  # Attach postgres cluster
+  flyctl postgres attach "$postgres_app" --app "$app"
+
+  # Prepare deploy command
+  deploy_cmd=(flyctl deploy --app "$app" --regions "$region" --strategy immediate --remote-only --ha false)
+  [ -n "$detach" ] && deploy_cmd+=("$detach")
+
+  # Add build arguments to deploy command if provided
+  if [ -n "$INPUT_BUILD_ARGS" ]; then
+    while IFS= read -r arg; do
+      deploy_cmd+=(--build-arg "$arg")
+    done <<< "$INPUT_BUILD_ARGS"
+  fi
+
+  # Execute the deploy command
+  "${deploy_cmd[@]}"
 
   statusmessage="Review app created. It may take a few minutes for the app to deploy."
 elif [ "$EVENT_TYPE" = "synchronize" ]; then
-  flyctl "deploy $detach --app $app --regions $region --strategy immediate --remote-only --ha false $build_args"
+  # App exists and PR was updated, so we need to redeploy
+  deploy_cmd=(flyctl deploy --app "$app" --regions "$region" --strategy immediate --remote-only --ha false)
+  [ -n "$detach" ] && deploy_cmd+=("$detach")
+
+  # Add build arguments to deploy command if provided
+  if [ -n "$INPUT_BUILD_ARGS" ]; then
+    while IFS= read -r arg; do
+      deploy_cmd+=(--build-arg "$arg")
+    done <<< "$INPUT_BUILD_ARGS"
+  fi
+
+  # Execute the deploy command
+  "${deploy_cmd[@]}"
+
   statusmessage="Review app updated. It may take a few minutes for your changes to be deployed."
 fi
 
-# Make some info available to the GitHub workflow.
+# Get the app status and extract relevant information
 flyctl status --app "$app" --json >status.json
 hostname=$(jq -r .Hostname status.json)
 appid=$(jq -r .ID status.json)
 
+# Output relevant information for use in GitHub Actions
 echo "hostname=$hostname" >> $GITHUB_OUTPUT
 echo "url=https://$hostname" >> $GITHUB_OUTPUT
 echo "id=$appid" >> $GITHUB_OUTPUT
