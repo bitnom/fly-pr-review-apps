@@ -60,15 +60,15 @@ fi
 
 # Deploy the Fly app, creating it first if needed.
 if ! flyctl status --app "$app"; then
-  flyctl launch --no-deploy --copy-config --name "$app" --dockerfile "$dockerfile" --regions "$region" --org "$org" --ha=false "$build_args"
+  flyctl launch --no-deploy --copy-config --name "$app" --dockerfile "$dockerfile" --regions "$region" --org "$org" --ha false "$build_args"
 
   # Attach postgres cluster and set the DATABASE_URL
   flyctl postgres attach "$postgres_app" --app "$app"
-  flyctl deploy $detach --app "$app" --regions "$region" --strategy immediate --remote-only --ha=false "$build_args"
+  flyctl deploy $detach --app "$app" --regions "$region" --strategy immediate --remote-only --ha false "$build_args"
 
   statusmessage="Review app created. It may take a few minutes for the app to deploy."
 elif [ "$EVENT_TYPE" = "synchronize" ]; then
-  flyctl deploy $detach --app "$app" --regions "$region" --strategy immediate --remote-only --ha=false "$build_args"
+  flyctl deploy $detach --app "$app" --regions "$region" --strategy immediate --remote-only --ha false "$build_args"
   statusmessage="Review app updated. It may take a few minutes for your changes to be deployed."
 fi
 
