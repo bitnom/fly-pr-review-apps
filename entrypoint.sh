@@ -48,13 +48,19 @@ if [ "$EVENT_TYPE" = "closed" ]; then
 fi
 
 # Initialize the command array
-build_cmd=(flyctl)
+build_cmd=(flyctl launch --no-deploy --copy-config --name "$app" --dockerfile "$dockerfile" --regions "$region" --org "$org")
+
+# Add --ha flag with the correct value
+if [ "$INPUT_HA" = "true" ]; then
+  ha_flag="--ha=true"
+else
+  ha_flag="--ha=false"
+fi
+
+build_cmd+=("$ha_flag")
 
 # Check if the app already exists
 if ! flyctl status --app "$app"; then
-  # App doesn't exist, so we need to create it
-  build_cmd+=(launch --no-deploy --copy-config --name "$app" --dockerfile "$dockerfile" --regions "$region" --org "$org" --ha false)
-
   # Add build arguments if provided
   if [ -n "$INPUT_BUILD_ARGS" ]; then
     while IFS= read -r arg; do
@@ -69,7 +75,7 @@ if ! flyctl status --app "$app"; then
   flyctl postgres attach "$postgres_app" --app "$app"
 
   # Prepare deploy command
-  deploy_cmd=(flyctl deploy --app "$app" --regions "$region" --strategy immediate --remote-only --ha false)
+  deploy_cmd=(flyctl deploy --app "$app" --regions "$region" --strategy immediate --remote-only "$ha_flag")
   [ -n "$detach" ] && deploy_cmd+=("$detach")
 
   # Add build arguments to deploy command if provided
@@ -85,7 +91,7 @@ if ! flyctl status --app "$app"; then
   statusmessage="Review app created. It may take a few minutes for the app to deploy."
 elif [ "$EVENT_TYPE" = "synchronize" ]; then
   # App exists and PR was updated, so we need to redeploy
-  deploy_cmd=(flyctl deploy --app "$app" --regions "$region" --strategy immediate --remote-only --ha false)
+  deploy_cmd=(flyctl deploy --app "$app" --regions "$region" --strategy immediate --remote-only "$ha_flag")
   [ -n "$detach" ] && deploy_cmd+=("$detach")
 
   # Add build arguments to deploy command if provided
@@ -111,3 +117,4 @@ echo "hostname=$hostname" >> $GITHUB_OUTPUT
 echo "url=https://$hostname" >> $GITHUB_OUTPUT
 echo "id=$appid" >> $GITHUB_OUTPUT
 echo "name=$app" >> $GITHUB_OUTPUT
+echo "message=$statusmessage" >> $GITHUB_OUTPUT
