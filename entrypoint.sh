@@ -22,6 +22,14 @@ else
   detach="--detach"
 fi
 
+# Check if INPUT_HA is set, if not, set it to "--ha=false"
+if [ -z "$INPUT_HA" ]; then
+    INPUT_HA="--ha=false"
+elif [[ "$INPUT_HA" != "--ha="* ]]; then
+    # If INPUT_HA is set but doesn't start with "--ha=", add the prefix
+    INPUT_HA="--ha=$INPUT_HA"
+fi
+
 PR_NUMBER=$(jq -r .number /github/workflow/event.json)
 if [ -z "$PR_NUMBER" ]; then
   echo "This action only supports pull_request actions."
@@ -55,7 +63,7 @@ fi
 if ! flyctl status --app "$app"; then
   # Backup the original config file since 'flyctl launch' messes up the [build.args] section
   cp "$config" "$config.bak"
-  flyctl launch $build_args --no-deploy --copy-config --name "$app" --image "$image" --regions "$region" --org "$org"
+  flyctl launch $build_args $INPUT_HA --no-deploy --copy-config --name "$app" --image "$image" --regions "$region" --org "$org"
   # Restore the original config file
   cp "$config.bak" "$config"
 fi
@@ -71,9 +79,9 @@ fi
 # Trigger the deploy of the new version.
 echo "Contents of config $config file: " && cat "$config"
 if [ -n "$INPUT_VM" ]; then
-  flyctl deploy $detach $build_args --config "$config" --app "$app" --regions "$region" --image "$image" --strategy immediate --ha=$INPUT_HA --vm-size "$INPUT_VMSIZE"
+  flyctl deploy $detach $build_args --config "$config" --app "$app" --regions "$region" --image "$image" --strategy immediate $INPUT_HA --vm-size "$INPUT_VMSIZE"
 else
-  flyctl deploy $detach $build_args --config "$config" --app "$app" --regions "$region" --image "$image" --strategy immediate --ha=$INPUT_HA --vm-cpu-kind "$INPUT_CPUKIND" --vm-cpus $INPUT_CPU --vm-memory "$INPUT_MEMORY"
+  flyctl deploy $detach $build_args --config "$config" --app "$app" --regions "$region" --image "$image" --strategy immediate $INPUT_HA --vm-cpu-kind "$INPUT_CPUKIND" --vm-cpus $INPUT_CPU --vm-memory "$INPUT_MEMORY"
 fi
 
 # Make some info available to the GitHub workflow.
