@@ -10,9 +10,9 @@ fi
 # Process build arguments
 build_args=""
 if [ -n "$INPUT_BUILD_ARGS" ]; then
-    while IFS= read -r line; do
+    echo "$INPUT_BUILD_ARGS" | while IFS= read -r line; do
         build_args="$build_args --build-arg $line"
-    done <<< "$INPUT_BUILD_ARGS"
+    done
 fi
 
 # Handle INPUT_WAIT variable
