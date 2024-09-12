@@ -30,7 +30,7 @@ inputs:
     required: false
   wait:
     description: 'Wait for flyio deployment to finish instead of detach'
-    required: false
+    default: true
   secrets:
     description: Secrets to be set on the app. Separate multiple secrets with a space
     required: false
