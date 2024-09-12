@@ -88,7 +88,7 @@ fi
 
 # Trigger the deploy of the new version.
 echo "Contents of config $config file: " && cat "$config"
-if [ -n "$INPUT_VM" ]; then
+if [ -n "$INPUT_VMSIZE" ]; then
   flyctl deploy $detach $build_args --config "$config" --app "$app" --regions "$region" --image "$image" --strategy immediate $INPUT_HA --vm-size "$INPUT_VMSIZE"
 else
   flyctl deploy $detach $build_args --config "$config" --app "$app" --regions "$region" --image "$image" --strategy immediate $INPUT_HA --vm-cpu-kind "$INPUT_CPUKIND" --vm-cpus $INPUT_CPU --vm-memory "$INPUT_MEMORY"
