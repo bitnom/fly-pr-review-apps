@@ -67,8 +67,18 @@ if ! flyctl status --app "$app"; then
   # Restore the original config file
   cp "$config.bak" "$config"
 fi
+
+sanitize_secret_name() {
+    echo "\$1" | sed 's/[^a-zA-Z0-9_]/_/g'
+}
+
 if [ -n "$INPUT_SECRETS" ]; then
-  echo $INPUT_SECRETS | tr " " "\n" | flyctl secrets import --app "$app"
+  echo "$INPUT_SECRETS" | tr " " "\n" | while IFS= read -r secret; do
+    key=$(echo "$secret" | cut -d'=' -f1)
+    value=$(echo "$secret" | cut -d'=' -f2-)
+    sanitized_key=$(sanitize_secret_name "$key")
+    printf "%s='%s'\n" "$sanitized_key" "$value"
+  done | flyctl secrets import --app "$app"
 fi
 
 # Attach postgres cluster to the app if specified.
