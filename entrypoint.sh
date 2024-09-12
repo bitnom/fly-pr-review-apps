@@ -1,120 +1,86 @@
-#!/usr/bin/env bash
+#!/bin/sh -l
 
-# Exit immediately if a command exits with a non-zero status.
-# Print commands and their arguments as they are executed.
 set -ex
 
-# Change to the specified directory if INPUT_PATH is provided
 if [ -n "$INPUT_PATH" ]; then
+  # Allow user to change directories in which to run Fly commands.
   cd "$INPUT_PATH" || exit
 fi
 
-# Extract the PR number from the GitHub event JSON
+# Process build arguments
+build_args=""
+if [ -n "$INPUT_BUILD_ARGS" ]; then
+    while IFS= read -r line; do
+        build_args="$build_args --build-arg $line"
+    done <<< "$INPUT_BUILD_ARGS"
+fi
+
+# Handle INPUT_WAIT variable
+if [ "$INPUT_WAIT" = "true" ]; then
+  detach=""
+else
+  detach="--detach"
+fi
+
 PR_NUMBER=$(jq -r .number /github/workflow/event.json)
 if [ -z "$PR_NUMBER" ]; then
   echo "This action only supports pull_request actions."
   exit 1
 fi
 
-# Check the flyctl version
-flyctl version
-
-# Extract repository name and event type from the GitHub event JSON
-REPO_NAME=$(jq -r .repository.name /github/workflow/event.json)
+GITHUB_REPOSITORY_NAME=${GITHUB_REPOSITORY#$GITHUB_REPOSITORY_OWNER/}
 EVENT_TYPE=$(jq -r .action /github/workflow/event.json)
 
-# Set up variables with default values
-app="${INPUT_NAME:-$REPO_NAME-pr-$PR_NUMBER}"
-postgres_app="${INPUT_POSTGRES:-$REPO_NAME-pr-$PR_NUMBER-postgres}"
-region="${INPUT_REGION:-${FLY_REGION:-ord}}"
+# Default the Fly app name to pr-{number}-{repo_owner}-{repo_name}
+app="${INPUT_NAME:-pr-$PR_NUMBER-$GITHUB_REPOSITORY_OWNER-$GITHUB_REPOSITORY_NAME}"
+# Change underscores to hyphens.
+app="${app//_/-}"
+region="${INPUT_REGION:-${FLY_REGION:-iad}}"
 org="${INPUT_ORG:-${FLY_ORG:-personal}}"
-dockerfile="$INPUT_DOCKERFILE"
+image="$INPUT_IMAGE"
+config="${INPUT_CONFIG:-fly.toml}"
 
-# Set detach flag based on INPUT_WAIT
-detach=""
-[ "$INPUT_WAIT" != "true" ] && detach="--detach"
-
-# Safety check: ensure app name contains PR number
 if ! echo "$app" | grep "$PR_NUMBER"; then
   echo "For safety, this action requires the app's name to contain the PR number."
   exit 1
 fi
 
-# If PR is closed, destroy the app and exit
+# PR was closed - remove the Fly app if one exists and exit.
 if [ "$EVENT_TYPE" = "closed" ]; then
   flyctl apps destroy "$app" -y || true
-  echo "message=Review app deleted." >> $GITHUB_OUTPUT
   exit 0
 fi
 
-# Initialize the command array
-build_cmd=(flyctl launch --no-deploy --copy-config --name "$app" --dockerfile "$dockerfile" --regions "$region" --org "$org")
-
-# Add --ha flag with the correct value
-if [ "$INPUT_HA" = "true" ]; then
-  ha_flag="--ha=true"
-else
-  ha_flag="--ha=false"
-fi
-
-build_cmd+=("$ha_flag")
-
-# Check if the app already exists
+# Deploy the Fly app, creating it first if needed.
 if ! flyctl status --app "$app"; then
-  # Add build arguments if provided
-  if [ -n "$INPUT_BUILD_ARGS" ]; then
-    while IFS= read -r arg; do
-      build_cmd+=(--build-arg "$arg")
-    done <<< "$INPUT_BUILD_ARGS"
-  fi
-
-  # Execute the build command
-  "${build_cmd[@]}"
-
-  # Attach postgres cluster
-  flyctl postgres attach "$postgres_app" --app "$app"
-
-  # Prepare deploy command
-  deploy_cmd=(flyctl deploy --app "$app" --regions "$region" --strategy immediate --remote-only "$ha_flag")
-  [ -n "$detach" ] && deploy_cmd+=("$detach")
-
-  # Add build arguments to deploy command if provided
-  if [ -n "$INPUT_BUILD_ARGS" ]; then
-    while IFS= read -r arg; do
-      deploy_cmd+=(--build-arg "$arg")
-    done <<< "$INPUT_BUILD_ARGS"
-  fi
-
-  # Execute the deploy command
-  "${deploy_cmd[@]}"
-
-  statusmessage="Review app created. It may take a few minutes for the app to deploy."
-elif [ "$EVENT_TYPE" = "synchronize" ]; then
-  # App exists and PR was updated, so we need to redeploy
-  deploy_cmd=(flyctl deploy --app "$app" --regions "$region" --strategy immediate --remote-only "$ha_flag")
-  [ -n "$detach" ] && deploy_cmd+=("$detach")
-
-  # Add build arguments to deploy command if provided
-  if [ -n "$INPUT_BUILD_ARGS" ]; then
-    while IFS= read -r arg; do
-      deploy_cmd+=(--build-arg "$arg")
-    done <<< "$INPUT_BUILD_ARGS"
-  fi
-
-  # Execute the deploy command
-  "${deploy_cmd[@]}"
-
-  statusmessage="Review app updated. It may take a few minutes for your changes to be deployed."
+  # Backup the original config file since 'flyctl launch' messes up the [build.args] section
+  cp "$config" "$config.bak"
+  flyctl launch $build_args --no-deploy --copy-config --name "$app" --image "$image" --regions "$region" --org "$org"
+  # Restore the original config file
+  cp "$config.bak" "$config"
+fi
+if [ -n "$INPUT_SECRETS" ]; then
+  echo $INPUT_SECRETS | tr " " "\n" | flyctl secrets import --app "$app"
 fi
 
-# Get the app status and extract relevant information
+# Attach postgres cluster to the app if specified.
+if [ -n "$INPUT_POSTGRES" ]; then
+  flyctl postgres attach "$INPUT_POSTGRES" --app "$app" || true
+fi
+
+# Trigger the deploy of the new version.
+echo "Contents of config $config file: " && cat "$config"
+if [ -n "$INPUT_VM" ]; then
+  flyctl deploy $detach $build_args --config "$config" --app "$app" --regions "$region" --image "$image" --strategy immediate --ha=$INPUT_HA --vm-size "$INPUT_VMSIZE"
+else
+  flyctl deploy $detach $build_args --config "$config" --app "$app" --regions "$region" --image "$image" --strategy immediate --ha=$INPUT_HA --vm-cpu-kind "$INPUT_CPUKIND" --vm-cpus $INPUT_CPU --vm-memory "$INPUT_MEMORY"
+fi
+
+# Make some info available to the GitHub workflow.
 flyctl status --app "$app" --json >status.json
 hostname=$(jq -r .Hostname status.json)
 appid=$(jq -r .ID status.json)
-
-# Output relevant information for use in GitHub Actions
 echo "hostname=$hostname" >> $GITHUB_OUTPUT
 echo "url=https://$hostname" >> $GITHUB_OUTPUT
 echo "id=$appid" >> $GITHUB_OUTPUT
 echo "name=$app" >> $GITHUB_OUTPUT
-echo "message=$statusmessage" >> $GITHUB_OUTPUT
